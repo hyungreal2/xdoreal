@@ -60,4 +60,4 @@ id="$(id -un)"
 title="${WINDOW_PREFIX}${HOST}_${id}_$$"
 
 log "launching terminal titled '$title' on DISPLAY=$DISPLAY_TARGET"
-exec "$XTERM_BIN" -display "$DISPLAY_TARGET" -T "$title" -xrm "${XTERM_RESOURCE_CLASS}.vt100.allowSendEvents: true"
+exec "$XTERM_BIN" -display "$DISPLAY_TARGET" -T "$title" -xrm "${XTERM_RESOURCE_CLASS}*allowSendEvents: true"
