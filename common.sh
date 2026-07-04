@@ -57,7 +57,12 @@ inject_via_clip() {
   local wid="$1" cmd="$2"
   printf '%s' "$cmd" | xclip -i -selection primary -l 1 &
   sleep "$CLIP_SETTLE"
-  xdotool key --window "$wid" ctrl+shift+v
+  # --clearmodifiers: without it, a modifier xdotool still believes is held
+  # from an earlier synthetic event in this run can bleed into this combo's
+  # state, so the window sees plain "v" (or the combo just doesn't match the
+  # translation) instead of Ctrl+Shift+V, and xterm falls back to inserting
+  # the literal character.
+  xdotool key --window "$wid" --clearmodifiers ctrl+shift+v
   xdotool key --window "$wid" Return
 }
 

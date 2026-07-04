@@ -65,4 +65,4 @@ log "launching terminal titled '$title' on DISPLAY=$DISPLAY_TARGET"
 # Insert isn't a native keysym everywhere (see inject_via_clip's comment).
 exec "$XTERM_BIN" -display "$DISPLAY_TARGET" -T "$title" \
   -xrm "${XTERM_RESOURCE_CLASS}*allowSendEvents: true" \
-  -xrm "${XTERM_RESOURCE_CLASS}*VT100.translations: #override Ctrl Shift <Key>V: insert-selection(PRIMARY, CUT_BUFFER0)"
+  -xrm "${XTERM_RESOURCE_CLASS}*vt100.translations: #override Ctrl Shift <Key>V: insert-selection(PRIMARY, CUT_BUFFER0)"
