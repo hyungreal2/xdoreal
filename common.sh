@@ -61,3 +61,66 @@ inject_command() {
     *) log "ERROR: unknown injection method: $method"; return 1 ;;
   esac
 }
+
+# Writes a script (wait for the barrier file, run $cmd timed, report elapsed
+# seconds/exit code/done marker to the given paths) to $scriptfile on the
+# shared NAS, in the given shell's dialect, and prints the short one-line
+# command to inject: "<interpreter> <scriptfile>".
+#
+# Scripts are written to a file rather than typed/pasted inline as a multi-line
+# quoted string because real interactive csh does not reliably continue an
+# open quote across a typed/pasted newline the way bash does — a quoted
+# string spanning lines can get mis-parsed or silently dropped. A plain
+# "csh scriptfile" one-liner sidesteps that entirely, for every shell.
+#
+# Assumes none of the paths contain spaces.
+build_remote_cmd() {
+  local syntax="$1" barrier="$2" cmd="$3" tfile="$4" rfile="$5" dfile="$6" scriptfile="$7"
+  local interp script
+
+  case "$syntax" in
+    bash)
+      interp="bash"
+      script="while [ ! -f $barrier ]; do sleep $BARRIER_POLL; done
+TIMEFORMAT=%R
+{ time $cmd ; } 2> $tfile
+echo \$? > $rfile
+touch $dfile"
+      ;;
+    sh)
+      interp="sh"
+      script="while [ ! -f $barrier ]; do sleep $BARRIER_POLL; done
+_t0=\$(date +%s)
+( $cmd ) > $tfile.log 2>&1
+_rc=\$?
+_t1=\$(date +%s)
+echo \$((_t1 - _t0)) > $tfile
+echo \$_rc > $rfile
+touch $dfile"
+      ;;
+    csh)
+      # csh's `while`/`end` must not be crammed onto one line with `;` —
+      # `end` has to be the only thing on its own line, or the parser errors
+      # out ("while: end not found.").
+      interp="csh"
+      script="while ( ! -f $barrier )
+sleep $BARRIER_POLL
+end
+set _t0 = \`date +%s\`
+( $cmd ) >& $tfile.log
+set _rc = \$status
+set _t1 = \`date +%s\`
+@ _dt = \$_t1 - \$_t0
+echo \$_dt > $tfile
+echo \$_rc > $rfile
+touch $dfile"
+      ;;
+    *)
+      log "ERROR: unknown shell syntax: $syntax"
+      return 1
+      ;;
+  esac
+
+  printf '%s\n' "$script" > "$scriptfile"
+  printf '%s %s' "$interp" "$scriptfile"
+}

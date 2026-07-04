@@ -14,10 +14,13 @@ a shared NAS.
 | `gen_hosts_list.sh` | Scans open terminals and (re)generates `hosts.list` |
 | `run_job.sh` | Master entry point: dispatch, run, collect timing |
 
-No agent needs to run on the target hosts — commands are typed/pasted directly
-into the shell that's already open in each terminal. `spawn_terminal.sh` has no
-dependency on `common.sh` (or any other file here), so it can be copied to a
-target host on its own.
+No agent needs to run on the target hosts. `run_job.sh` writes a small wrapper
+script to the shared NAS per target and types/pastes just `<interpreter>
+<scriptfile>` into the shell that's already open in each terminal — nothing
+multi-line or quoted gets typed directly, since real interactive `csh` doesn't
+reliably continue an open quote across a typed/pasted newline the way bash
+does. `spawn_terminal.sh` has no dependency on `common.sh` (or any other file
+here), so it can be copied to a target host on its own.
 
 ## Identifier format
 
@@ -49,7 +52,7 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 ## run_job.sh
 
 ```bash
-./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
+./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-P prefix] [-S bash|sh|csh]
 ```
 
 | Option | Meaning | Default |
@@ -61,21 +64,25 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 | `-w` | Max time to wait for completion (sec) | `3600` |
 | `-p` | Completion poll interval (sec) | `1` |
 | `-I` | Injection method: `type` or `clip` (`clip` needs `xclip`, much faster for large n) | `type` |
+| `-P` | Window title prefix, must match what `spawn_terminal.sh` used | `BATCH_` |
+| `-S` | Shell dialect of the target terminals: `bash`, `sh`, or `csh` | `bash` |
 
 ```bash
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H host03_alice_20441,host07_alice_20558 -t "16:30:00"
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 100 -c "run_batch.sh" -t "23:00:00" -I clip
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 20 -S csh -P "TERM_"
 ```
 
 Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`,
-`BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`), `INJECT_METHOD`.
+`BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`), `INJECT_METHOD`,
+`SHELL_SYNTAX`.
 
 ## Output
 
 Results land in `$NAS_ROOT/results/<JOBID>/summary.tsv` (`id`, seconds, exit
-code per line), plus per-id `.time`/`.rc` files. Status/barrier files are in
-`$NAS_ROOT/status/<JOBID>/`.
+code per line), plus per-id `.time`/`.rc` files. Status/barrier files, along
+with each id's generated `.script`, are in `$NAS_ROOT/status/<JOBID>/`.
 
 ```
 ID                        TIME(s)  RC
