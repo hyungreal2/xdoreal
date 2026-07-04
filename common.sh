@@ -87,14 +87,13 @@ inject_command() {
 # The script body has two independent, combinable parts:
 #   - setup_cmd: run literally, with no subshell/redirection, so things like
 #     `setenv FOO bar` take effect in the sourcing shell itself (and are then
-#     visible to bench_cmd below, since it runs as a child of this shell).
-#     Wrapping it in "( )" for output capture — like bench_cmd needs, to get
-#     a clean exit status without depending on what it printed — would defeat
-#     that entirely, since csh (like any shell) forks a new process for "( )",
-#     and env changes in a child never propagate back to the parent.
-#   - bench_cmd: run inside "( )" so its own exit status and elapsed time can
-#     be captured without it needing to cooperate (no special exit-code
-#     plumbing required from the command itself).
+#     visible to bench_cmd below, since it's a child of this shell either way).
+#   - bench_cmd: written to its own file ($scriptfile.bench) and run as
+#     `csh $scriptfile.bench` — a genuine child csh process, not a "( )"
+#     subshell of the sourcing shell — so its exit status and elapsed time
+#     are captured the same way regardless of what bench_cmd itself does
+#     (job control, nested shells, etc.), same as running `csh scriptfile`
+#     used to work before commands were injected via `source`.
 # Either can be empty; if both are given, setup_cmd always runs first.
 #
 # csh's `while`/`end` must not be crammed onto one line with `;` — `end` has
@@ -104,6 +103,7 @@ inject_command() {
 # Assumes none of the paths contain spaces.
 build_remote_cmd() {
   local barrier="$1" setup_cmd="$2" bench_cmd="$3" tfile="$4" rfile="$5" dfile="$6" scriptfile="$7"
+  local benchfile="${scriptfile}.bench"
   local script="while ( ! -f $barrier )
 sleep $BARRIER_POLL
 end"
@@ -114,9 +114,10 @@ $setup_cmd"
   fi
 
   if [ -n "$bench_cmd" ]; then
+    printf '%s\n' "$bench_cmd" > "$benchfile"
     script="$script
 set _t0 = \`date +%s\`
-( $bench_cmd ) >& $tfile.log
+csh $benchfile >& $tfile.log
 set _rc = \$status
 set _t1 = \`date +%s\`
 @ _dt = \$_t1 - \$_t0

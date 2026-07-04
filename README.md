@@ -19,12 +19,15 @@ wrapper script to the shared NAS per target and types/pastes just `source
 <scriptfile>` into the shell that's already open in each terminal — nothing
 multi-line or quoted gets typed directly, since real interactive `csh` doesn't
 reliably continue an open quote across a typed/pasted newline the way bash
-does. `source` (rather than spawning a new `csh scriptfile` process) runs it
-directly in that already-running shell, so it keeps that terminal's exact
-state — env vars, cwd, aliases — instead of a child process's. `spawn_terminal.sh`
-has no dependency on `common.sh` (or any other file here), so it can be
-copied to a target host on its own. Target terminals are assumed to run csh
-(or tcsh).
+does. `source`ing (rather than spawning a new `csh scriptfile` process for the
+*wrapper*) runs the wait-and-dispatch logic directly in that already-running
+shell, so any setup command (`-e`, see below) keeps that terminal's exact
+state — env vars, cwd, aliases. The benchmarked command (`-c`) is still run
+as its own separate `csh scriptfile` child process, same as before this
+`source` change, since it doesn't need to leave anything behind in the shell.
+`spawn_terminal.sh` has no dependency on `common.sh` (or any other file
+here), so it can be copied to a target host on its own. Target terminals are
+assumed to run csh (or tcsh).
 
 ## Identifier format
 
@@ -69,8 +72,9 @@ Two independent, combinable command types:
   that shell itself — wrapping a command in a subshell (needed for `-c`'s
   timing/exit-code capture) would fork a child process, and env changes in a
   child never make it back to the parent shell.
-- `-c` (benchmark): runs in a subshell, timed, with exit code and elapsed
-  seconds collected.
+- `-c` (benchmark): written to its own script file and run as `csh
+  <benchscript>` — a genuine child csh process, timed, with exit code and
+  elapsed seconds collected.
 
 At least one of `-e`/`-c` is required; if both are given, `-e` always runs
 first, so `-c`'s command sees whatever `-e` set up (e.g. env vars from
@@ -109,7 +113,8 @@ Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`
 
 Results land in `$NAS_ROOT/results/<JOBID>/summary.tsv` (`id`, seconds, exit
 code per line), plus per-id `.time`/`.rc` files. Status/barrier files, along
-with each id's generated `.script`, are in `$NAS_ROOT/status/<JOBID>/`.
+with each id's generated `.script` (and `.script.bench` when `-c` is used),
+are in `$NAS_ROOT/status/<JOBID>/`.
 Setup-only (`-e` with no `-c`) runs show `NA`/`NA` — nothing timed.
 
 ```
