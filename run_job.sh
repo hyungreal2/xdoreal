@@ -2,9 +2,10 @@
 # Master: runs a command on n selected X-shared terminals (xterm) at the same
 # target time, and collects each terminal's execution time via the NAS.
 #
-# hosts.list is assumed to hold full "host_id_pid" identifiers (spawn_terminal.sh's
-# window title with WINDOW_PREFIX stripped). find_window_id matches these
-# exactly, so multiple windows for the same host are never confused.
+# hosts.list is assumed to hold full window titles, prefix included (see
+# gen_hosts_list.sh). find_window_id matches these exactly, so multiple
+# windows for the same host are never confused, and there's no need to know
+# or pass WINDOW_PREFIX here at all.
 #
 # How simultaneity is achieved:
 #   1) Each target terminal first gets a "wait until the START file exists" command.
@@ -32,11 +33,11 @@ SHELL_SYNTAX="${SHELL_SYNTAX:-bash}"
 
 usage() {
   cat <<EOF
-Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-P prefix] [-S bash|sh|csh]
+Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-S bash|sh|csh]
 
   -c CMD      Command to run (default: run_batch.sh)
-  -n N        Pick N random identifiers from hosts.list
-  -H LIST     Explicit comma-separated identifier list ("host_id_pid" form,
+  -n N        Pick N random identifiers (full window titles) from hosts.list
+  -H LIST     Explicit comma-separated identifier list (full window titles,
               as stored in hosts.list; overrides -n)
   -t TIME     Target start time. "now" or anything date -d can parse (default: now)
               e.g. -t "16:30:00"  -t "2026-07-04 23:00:00"  -t "+5 minutes"
@@ -44,14 +45,13 @@ Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] 
   -p SECONDS  Completion poll interval (default: 1)
   -I METHOD   Injection method: type (char-by-char typing, default) | clip
               (clipboard+paste, needs xclip). clip is much faster for large n.
-  -P PREFIX   Window title prefix (default: \$WINDOW_PREFIX = "$WINDOW_PREFIX")
   -S SYNTAX   Shell dialect of the injected command: bash (default) | sh | csh.
               Pick the login shell actually running in the target terminals.
 EOF
   exit 1
 }
 
-while getopts "c:n:H:t:w:p:I:P:S:h" opt; do
+while getopts "c:n:H:t:w:p:I:S:h" opt; do
   case "$opt" in
     c) CMD="$OPTARG" ;;
     n) N="$OPTARG" ;;
@@ -60,7 +60,6 @@ while getopts "c:n:H:t:w:p:I:P:S:h" opt; do
     w) WAIT_TIMEOUT="$OPTARG" ;;
     p) POLL_INTERVAL="$OPTARG" ;;
     I) INJECT_METHOD="$OPTARG" ;;
-    P) WINDOW_PREFIX="$OPTARG" ;;
     S) SHELL_SYNTAX="$OPTARG" ;;
     *) usage ;;
   esac

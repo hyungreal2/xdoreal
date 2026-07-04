@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Scans xterm windows titled "<PREFIX><host>_<id>_<pid>" on the current X
-# display and generates hosts.list. Stores the full "<host>_<id>_<pid>" (with
-# the prefix stripped) as-is, so multiple windows for the same host each
+# display and generates hosts.list. Stores the full window title, prefix
+# included, as-is — run_job.sh then matches on that exact string, so it never
+# needs to know/reconstruct the prefix, and a hosts.list can even mix entries
+# spawned with different prefixes. Multiple windows for the same host each
 # survive as separate lines instead of collapsing into one.
 
 set -euo pipefail
@@ -41,11 +43,11 @@ IDS_FOUND=()
 for wid in "${WIDS[@]}"; do
   title="$(xdotool getwindowname "$wid" 2>/dev/null || true)"
   [[ "$title" == "${WINDOW_PREFIX}"* ]] || continue
-  IDS_FOUND+=("${title#"$WINDOW_PREFIX"}")
+  IDS_FOUND+=("$title")
 done
 
 if [ "${#IDS_FOUND[@]}" -eq 0 ]; then
-  log "WARN: windows found but no identifiers could be extracted"
+  log "WARN: windows found but no titles could be extracted"
   exit 1
 fi
 
@@ -55,4 +57,4 @@ if [ -f "$OUT_FILE" ]; then
 fi
 
 printf '%s\n' "${IDS_FOUND[@]}" | sort -u > "$OUT_FILE"
-log "scanned ${#WIDS[@]} window(s) -> wrote $(wc -l < "$OUT_FILE") unique identifier(s) to $OUT_FILE"
+log "scanned ${#WIDS[@]} window(s) -> wrote $(wc -l < "$OUT_FILE") unique title(s) to $OUT_FILE"

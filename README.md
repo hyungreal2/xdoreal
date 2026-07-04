@@ -8,7 +8,7 @@ a shared NAS.
 
 | File | Purpose |
 |---|---|
-| `hosts.list` | Registry of target identifiers, one `host_id_pid` per line |
+| `hosts.list` | Registry of target terminals, one full window title per line |
 | `common.sh` | Shared config and helpers |
 | `spawn_terminal.sh` | Run on a host to open its batch terminal on the master's shared DISPLAY |
 | `gen_hosts_list.sh` | Scans open terminals and (re)generates `hosts.list` |
@@ -28,8 +28,12 @@ Each terminal's window title is `<WINDOW_PREFIX><host>_<id>_<pid>`
 (e.g. `BATCH_host03_hyungreal_14007`), where `id` is the spawning user's login
 name and `pid` is `spawn_terminal.sh`'s own PID (kept through `exec`). This
 guarantees a unique title even if the same host gets a terminal spawned twice.
-`hosts.list` stores the full `<host>_<id>_<pid>` string, and matching is always
-an exact match — no ambiguity when a host has more than one terminal open.
+
+`hosts.list` stores this **entire title, prefix included**, and `run_job.sh`
+matches on that exact string — it never needs to know or reconstruct
+`WINDOW_PREFIX`. This also means a single `hosts.list` can mix entries spawned
+under different prefixes (e.g. one batch from `-P "BATCH_"`, another from
+`-P "OTHER_"` appended in) and `run_job.sh` still finds each one correctly.
 
 ## spawn_terminal.sh
 
@@ -52,29 +56,29 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 ## run_job.sh
 
 ```bash
-./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-P prefix] [-S bash|sh|csh]
+./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-S bash|sh|csh]
 ```
 
 | Option | Meaning | Default |
 |---|---|---|
 | `-c` | Command to run | `run_batch.sh` |
-| `-n` | Pick N random identifiers from `hosts.list` | - |
-| `-H` | Explicit comma-separated identifier list (overrides `-n`) | - |
+| `-n` | Pick N random identifiers (full window titles) from `hosts.list` | - |
+| `-H` | Explicit comma-separated identifier list (full window titles, overrides `-n`) | - |
 | `-t` | Target start time (`now` or anything `date -d` parses) | `now` |
 | `-w` | Max time to wait for completion (sec) | `3600` |
 | `-p` | Completion poll interval (sec) | `1` |
 | `-I` | Injection method: `type` or `clip` (`clip` needs `xclip`, much faster for large n) | `type` |
-| `-P` | Window title prefix, must match what `spawn_terminal.sh` used | `BATCH_` |
 | `-S` | Shell dialect of the target terminals: `bash`, `sh`, or `csh` | `bash` |
 
 ```bash
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10
-NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H host03_alice_20441,host07_alice_20558 -t "16:30:00"
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H BATCH_host03_alice_20441,BATCH_host07_alice_20558 -t "16:30:00"
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 100 -c "run_batch.sh" -t "23:00:00" -I clip
-NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 20 -S csh -P "TERM_"
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 20 -S csh
 ```
 
-Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`,
+Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`
+(only used by `spawn_terminal.sh`/`gen_hosts_list.sh`, not `run_job.sh`),
 `BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`), `INJECT_METHOD`,
 `SHELL_SYNTAX`.
 
@@ -85,9 +89,9 @@ code per line), plus per-id `.time`/`.rc` files. Status/barrier files, along
 with each id's generated `.script`, are in `$NAS_ROOT/status/<JOBID>/`.
 
 ```
-ID                        TIME(s)  RC
-host03_alice_20441        12.481   0
-host07_alice_20558        12.479   0
+ID                                   TIME(s)  RC
+BATCH_host03_alice_20441             12.481   0
+BATCH_host07_alice_20558             12.479   0
 
 Completed 2 | avg=12.480s max=12.481s min=12.479s
 ```

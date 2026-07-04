@@ -7,9 +7,9 @@
 # title can never collide with another running terminal. This works even
 # without xdotool on the host running spawn.
 #
-# The title minus WINDOW_PREFIX ("${HOST}_${ID}_$$") is the identifier stored
-# as-is in hosts.list (see gen_hosts_list.sh), so multiple windows for the
-# same host can still be told apart precisely.
+# This full title, prefix included, is what gets stored as-is in hosts.list
+# (see gen_hosts_list.sh), so multiple windows for the same host can still be
+# told apart precisely.
 
 set -euo pipefail
 

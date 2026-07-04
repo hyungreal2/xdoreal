@@ -18,14 +18,14 @@ STATUS_DIR()  { echo "$NAS_ROOT/status/$1"; }
 
 log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >&2; }
 
-# hosts.list stores the full "host_id_pid" identifier (spawn_terminal.sh's
-# window title with WINDOW_PREFIX stripped). Finds the window whose title is
-# an exact match for "${WINDOW_PREFIX}${id}" — since id is already unique,
-# no prefix/partial matching is needed, so multiple windows for the same host
-# never get confused with each other.
+# hosts.list stores the full window title, prefix included (see
+# gen_hosts_list.sh). Finds the window whose title is an exact match — since
+# the stored string already includes whatever prefix that window was spawned
+# with, callers never need to know/reconstruct WINDOW_PREFIX, and entries
+# spawned under different prefixes can coexist in the same hosts.list.
 find_window_id() {
-  local id="$1"
-  xdotool search --name "^${WINDOW_PREFIX}${id}\$" 2>/dev/null | head -n1
+  local fullname="$1"
+  xdotool search --name "^${fullname}\$" 2>/dev/null | head -n1
 }
 
 select_hosts_random() {
