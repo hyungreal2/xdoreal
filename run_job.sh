@@ -29,11 +29,10 @@ TARGET_TIME="now"
 WAIT_TIMEOUT=3600
 POLL_INTERVAL=1
 INJECT_METHOD="${INJECT_METHOD:-type}"
-SHELL_SYNTAX="${SHELL_SYNTAX:-bash}"
 
 usage() {
   cat <<EOF
-Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-S bash|sh|csh]
+Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
 
   -c CMD      Command to run (default: run_batch.sh)
   -n N        Pick N random identifiers (full window titles) from hosts.list
@@ -45,13 +44,11 @@ Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] 
   -p SECONDS  Completion poll interval (default: 1)
   -I METHOD   Injection method: type (char-by-char typing, default) | clip
               (clipboard+paste, needs xclip). clip is much faster for large n.
-  -S SYNTAX   Shell dialect of the injected command: bash (default) | sh | csh.
-              Pick the login shell actually running in the target terminals.
 EOF
   exit 1
 }
 
-while getopts "c:n:H:t:w:p:I:S:h" opt; do
+while getopts "c:n:H:t:w:p:I:h" opt; do
   case "$opt" in
     c) CMD="$OPTARG" ;;
     n) N="$OPTARG" ;;
@@ -60,7 +57,6 @@ while getopts "c:n:H:t:w:p:I:S:h" opt; do
     w) WAIT_TIMEOUT="$OPTARG" ;;
     p) POLL_INTERVAL="$OPTARG" ;;
     I) INJECT_METHOD="$OPTARG" ;;
-    S) SHELL_SYNTAX="$OPTARG" ;;
     *) usage ;;
   esac
 done
@@ -71,11 +67,6 @@ case "$INJECT_METHOD" in
   type) ;;
   clip) command -v xclip >/dev/null 2>&1 || { log "ERROR: -I clip requires xclip (sudo dnf install xclip)"; exit 1; } ;;
   *) log "ERROR: -I must be type or clip"; exit 1 ;;
-esac
-
-case "$SHELL_SYNTAX" in
-  bash|sh|csh) ;;
-  *) log "ERROR: -S must be bash, sh, or csh"; exit 1 ;;
 esac
 
 if [ -n "$IDS_CSV" ]; then
@@ -103,7 +94,7 @@ for id in "${TARGET_IDS[@]}"; do
     continue
   fi
 
-  remote_cmd="$(build_remote_cmd "$SHELL_SYNTAX" "$BARRIER_FILE" "$CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
+  remote_cmd="$(build_remote_cmd "$BARRIER_FILE" "$CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
 
   inject_command "$INJECT_METHOD" "$wid" "$remote_cmd"
   log "injected wait command for $id (wid=$wid, method=$INJECT_METHOD)"

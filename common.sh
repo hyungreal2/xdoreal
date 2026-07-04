@@ -41,15 +41,23 @@ inject_via_type() {
   xdotool key  --window "$wid" Return
 }
 
-# Loads the PRIMARY selection via xclip and pastes with xterm's default
-# Shift+Insert binding. Fast regardless of string length, so better for large
-# n (e.g. 100 hosts). `xclip -l 1` exits after serving one request, so no
-# zombie process is left behind.
+# Loads the PRIMARY selection via xclip and pastes with the Ctrl+Shift+V
+# binding that spawn_terminal.sh sets up (see its -xrm translation). Fast
+# regardless of string length, so better for large n (e.g. 100 hosts).
+# `xclip -l 1` exits after serving one request, so no zombie process is left
+# behind.
+#
+# Ctrl+Shift+V rather than xterm's default Shift+Insert: Insert isn't a native
+# key in every keymap (many minimal/remote X setups don't define it), so
+# xdotool has to temporarily remap a spare keycode to it — a real race that
+# can misfire and send whatever that keycode used to mean instead (e.g. a
+# stray "~"). Ctrl/Shift/V are always native keys, so no remapping ever
+# happens.
 inject_via_clip() {
   local wid="$1" cmd="$2"
   printf '%s' "$cmd" | xclip -i -selection primary -l 1 &
   sleep "$CLIP_SETTLE"
-  xdotool key --window "$wid" shift+Insert
+  xdotool key --window "$wid" ctrl+shift+v
   xdotool key --window "$wid" Return
 }
 
@@ -62,48 +70,30 @@ inject_command() {
   esac
 }
 
-# Writes a script (wait for the barrier file, run $cmd timed, report elapsed
-# seconds/exit code/done marker to the given paths) to $scriptfile on the
-# shared NAS, in the given shell's dialect, and prints the short one-line
-# command to inject: "<interpreter> <scriptfile>".
+# Writes a csh script (wait for the barrier file, run $cmd timed, report
+# elapsed seconds/exit code/done marker to the given paths) to $scriptfile on
+# the shared NAS, and prints the short one-line command to inject:
+# "source <scriptfile>".
 #
-# Scripts are written to a file rather than typed/pasted inline as a multi-line
-# quoted string because real interactive csh does not reliably continue an
-# open quote across a typed/pasted newline the way bash does — a quoted
-# string spanning lines can get mis-parsed or silently dropped. A plain
-# "csh scriptfile" one-liner sidesteps that entirely, for every shell.
+# Always csh, and always `source` rather than spawning a new interpreter
+# process, because:
+#   - the script is written to a file and just referenced by path, so the
+#     interactive shell's own dialect never actually matters for typing it —
+#     there's no multi-line/quoted text to get mis-parsed either way — so
+#     there's no reason to support more than one target dialect.
+#   - `source` runs it directly in the terminal's already-running csh, instead
+#     of a child process, so it keeps that shell's full state (env, cwd,
+#     aliases, non-exported variables) exactly as-is, matching the
+#     requirement that the existing shell run the job, not a fresh one.
+#
+# csh's `while`/`end` must not be crammed onto one line with `;` — `end` has
+# to be the only thing on its own line, or the parser errors out
+# ("while: end not found.").
 #
 # Assumes none of the paths contain spaces.
 build_remote_cmd() {
-  local syntax="$1" barrier="$2" cmd="$3" tfile="$4" rfile="$5" dfile="$6" scriptfile="$7"
-  local interp script
-
-  case "$syntax" in
-    bash)
-      interp="bash"
-      script="while [ ! -f $barrier ]; do sleep $BARRIER_POLL; done
-TIMEFORMAT=%R
-{ time $cmd ; } 2> $tfile
-echo \$? > $rfile
-touch $dfile"
-      ;;
-    sh)
-      interp="sh"
-      script="while [ ! -f $barrier ]; do sleep $BARRIER_POLL; done
-_t0=\$(date +%s)
-( $cmd ) > $tfile.log 2>&1
-_rc=\$?
-_t1=\$(date +%s)
-echo \$((_t1 - _t0)) > $tfile
-echo \$_rc > $rfile
-touch $dfile"
-      ;;
-    csh)
-      # csh's `while`/`end` must not be crammed onto one line with `;` —
-      # `end` has to be the only thing on its own line, or the parser errors
-      # out ("while: end not found.").
-      interp="csh"
-      script="while ( ! -f $barrier )
+  local barrier="$1" cmd="$2" tfile="$3" rfile="$4" dfile="$5" scriptfile="$6"
+  local script="while ( ! -f $barrier )
 sleep $BARRIER_POLL
 end
 set _t0 = \`date +%s\`
@@ -114,13 +104,7 @@ set _t1 = \`date +%s\`
 echo \$_dt > $tfile
 echo \$_rc > $rfile
 touch $dfile"
-      ;;
-    *)
-      log "ERROR: unknown shell syntax: $syntax"
-      return 1
-      ;;
-  esac
 
   printf '%s\n' "$script" > "$scriptfile"
-  printf '%s %s' "$interp" "$scriptfile"
+  printf 'source %s' "$scriptfile"
 }

@@ -14,13 +14,17 @@ a shared NAS.
 | `gen_hosts_list.sh` | Scans open terminals and (re)generates `hosts.list` |
 | `run_job.sh` | Master entry point: dispatch, run, collect timing |
 
-No agent needs to run on the target hosts. `run_job.sh` writes a small wrapper
-script to the shared NAS per target and types/pastes just `<interpreter>
+No agent needs to run on the target hosts. `run_job.sh` writes a small csh
+wrapper script to the shared NAS per target and types/pastes just `source
 <scriptfile>` into the shell that's already open in each terminal — nothing
 multi-line or quoted gets typed directly, since real interactive `csh` doesn't
 reliably continue an open quote across a typed/pasted newline the way bash
-does. `spawn_terminal.sh` has no dependency on `common.sh` (or any other file
-here), so it can be copied to a target host on its own.
+does. `source` (rather than spawning a new `csh scriptfile` process) runs it
+directly in that already-running shell, so it keeps that terminal's exact
+state — env vars, cwd, aliases — instead of a child process's. `spawn_terminal.sh`
+has no dependency on `common.sh` (or any other file here), so it can be
+copied to a target host on its own. Target terminals are assumed to run csh
+(or tcsh).
 
 ## Identifier format
 
@@ -56,7 +60,7 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 ## run_job.sh
 
 ```bash
-./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-S bash|sh|csh]
+./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
 ```
 
 | Option | Meaning | Default |
@@ -68,19 +72,22 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 | `-w` | Max time to wait for completion (sec) | `3600` |
 | `-p` | Completion poll interval (sec) | `1` |
 | `-I` | Injection method: `type` or `clip` (`clip` needs `xclip`, much faster for large n) | `type` |
-| `-S` | Shell dialect of the target terminals: `bash`, `sh`, or `csh` | `bash` |
+
+`clip` pastes via Ctrl+Shift+V, a binding `spawn_terminal.sh` sets up at
+launch — not xterm's default Shift+Insert, since `Insert` isn't a native key
+in every keymap and xdotool's fallback (temporarily remapping a spare keycode
+to it) can race and send the wrong character. Terminals not spawned through
+`spawn_terminal.sh` won't have this binding, so `-I clip` won't work there.
 
 ```bash
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H BATCH_host03_alice_20441,BATCH_host07_alice_20558 -t "16:30:00"
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 100 -c "run_batch.sh" -t "23:00:00" -I clip
-NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 20 -S csh
 ```
 
 Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`
 (only used by `spawn_terminal.sh`/`gen_hosts_list.sh`, not `run_job.sh`),
-`BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`), `INJECT_METHOD`,
-`SHELL_SYNTAX`.
+`BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`), `INJECT_METHOD`.
 
 ## Output
 

@@ -60,4 +60,9 @@ id="$(id -un)"
 title="${WINDOW_PREFIX}${HOST}_${id}_$$"
 
 log "launching terminal titled '$title' on DISPLAY=$DISPLAY_TARGET"
-exec "$XTERM_BIN" -display "$DISPLAY_TARGET" -T "$title" -xrm "${XTERM_RESOURCE_CLASS}*allowSendEvents: true"
+# Second -xrm binds Ctrl+Shift+V to paste PRIMARY, for the "clip" injection
+# method in common.sh — used instead of xterm's default Shift+Insert since
+# Insert isn't a native keysym everywhere (see inject_via_clip's comment).
+exec "$XTERM_BIN" -display "$DISPLAY_TARGET" -T "$title" \
+  -xrm "${XTERM_RESOURCE_CLASS}*allowSendEvents: true" \
+  -xrm "${XTERM_RESOURCE_CLASS}*VT100.translations: #override Ctrl Shift <Key>V: insert-selection(PRIMARY, CUT_BUFFER0)"
