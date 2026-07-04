@@ -73,8 +73,13 @@ Two independent, combinable command types:
   timing/exit-code capture) would fork a child process, and env changes in a
   child never make it back to the parent shell.
 - `-c` (benchmark): written to its own script file and run as `csh
-  <benchscript>` — a genuine child csh process, timed, with exit code and
-  elapsed seconds collected.
+  <benchscript>`, piped through `tee` — a genuine child csh process, timed,
+  with exit code and elapsed seconds collected, and its output shown live in
+  the terminal as well as saved to `<id>.time.log`. csh has no
+  pipefail/`PIPESTATUS`, so capturing the exit code through a pipe takes a
+  small trick: `( csh <benchscript> ; echo $status > <rcfile> ) |& tee ...` —
+  the inner subshell writes its own status before the outer pipe's status
+  (tee's, not the benchmark's) could clobber it.
 
 At least one of `-e`/`-c` is required; if both are given, `-e` always runs
 first, so `-c`'s command sees whatever `-e` set up (e.g. env vars from

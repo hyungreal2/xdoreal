@@ -115,14 +115,17 @@ $setup_cmd"
 
   if [ -n "$bench_cmd" ]; then
     printf '%s\n' "$bench_cmd" > "$benchfile"
+    # Piped through tee so output shows live in the terminal as well as
+    # landing in $tfile.log. csh has no pipefail/PIPESTATUS, so $status after
+    # a pipe would be tee's exit code, not the benchmark's — the inner
+    # subshell writes its own $status to $rfile right after csh finishes,
+    # before the outer pipe's status can overwrite anything.
     script="$script
 set _t0 = \`date +%s\`
-csh $benchfile >& $tfile.log
-set _rc = \$status
+( csh $benchfile ; echo \$status > $rfile ) |& tee $tfile.log
 set _t1 = \`date +%s\`
 @ _dt = \$_t1 - \$_t0
-echo \$_dt > $tfile
-echo \$_rc > $rfile"
+echo \$_dt > $tfile"
   fi
 
   script="$script
