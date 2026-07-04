@@ -22,7 +22,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-CMD="run_batch.sh"
+SETUP_CMD=""
+BENCH_CMD=""
 N=""
 IDS_CSV=""
 TARGET_TIME="now"
@@ -32,9 +33,14 @@ INJECT_METHOD="${INJECT_METHOD:-type}"
 
 usage() {
   cat <<EOF
-Usage: $0 -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
+Usage: $0 (-e "<setup>" | -c "<command>" | both) (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
 
-  -c CMD      Command to run (default: run_batch.sh)
+  -e SETUP    Command run as-is, directly in the target shell — no subshell,
+              no timing. Use for things like "setenv FOO bar" that must take
+              effect in that shell itself. If -c is also given, -e runs first.
+  -c CMD      Benchmarked command: run in a subshell, timed, with exit code
+              and elapsed seconds collected. Runs after -e if both are given.
+              At least one of -e/-c is required.
   -n N        Pick N random identifiers (full window titles) from hosts.list
   -H LIST     Explicit comma-separated identifier list (full window titles,
               as stored in hosts.list; overrides -n)
@@ -48,9 +54,10 @@ EOF
   exit 1
 }
 
-while getopts "c:n:H:t:w:p:I:h" opt; do
+while getopts "e:c:n:H:t:w:p:I:h" opt; do
   case "$opt" in
-    c) CMD="$OPTARG" ;;
+    e) SETUP_CMD="$OPTARG" ;;
+    c) BENCH_CMD="$OPTARG" ;;
     n) N="$OPTARG" ;;
     H) IDS_CSV="$OPTARG" ;;
     t) TARGET_TIME="$OPTARG" ;;
@@ -62,6 +69,7 @@ while getopts "c:n:H:t:w:p:I:h" opt; do
 done
 
 [ -z "$N" ] && [ -z "$IDS_CSV" ] && usage
+[ -z "$SETUP_CMD" ] && [ -z "$BENCH_CMD" ] && { log "ERROR: at least one of -e or -c is required"; exit 1; }
 
 case "$INJECT_METHOD" in
   type) ;;
@@ -94,7 +102,7 @@ for id in "${TARGET_IDS[@]}"; do
     continue
   fi
 
-  remote_cmd="$(build_remote_cmd "$BARRIER_FILE" "$CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
+  remote_cmd="$(build_remote_cmd "$BARRIER_FILE" "$SETUP_CMD" "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
 
   inject_command "$INJECT_METHOD" "$wid" "$remote_cmd"
   log "injected wait command for $id (wid=$wid, method=$INJECT_METHOD)"

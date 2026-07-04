@@ -60,12 +60,26 @@ Backs up any existing output file to `<file>.bak` before overwriting.
 ## run_job.sh
 
 ```bash
-./run_job.sh -c "<command>" (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
+./run_job.sh (-e "<setup>" | -c "<command>" | both) (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
 ```
+
+Two independent, combinable command types:
+- `-e` (setup): runs as-is, directly in the target shell, no subshell, no
+  timing. Use it for things like `setenv FOO bar` that need to take effect in
+  that shell itself — wrapping a command in a subshell (needed for `-c`'s
+  timing/exit-code capture) would fork a child process, and env changes in a
+  child never make it back to the parent shell.
+- `-c` (benchmark): runs in a subshell, timed, with exit code and elapsed
+  seconds collected.
+
+At least one of `-e`/`-c` is required; if both are given, `-e` always runs
+first, so `-c`'s command sees whatever `-e` set up (e.g. env vars from
+`setenv`, since subshells inherit their parent's environment).
 
 | Option | Meaning | Default |
 |---|---|---|
-| `-c` | Command to run | `run_batch.sh` |
+| `-e` | Setup command (see above) | - |
+| `-c` | Benchmarked command (see above) | - |
 | `-n` | Pick N random identifiers (full window titles) from `hosts.list` | - |
 | `-H` | Explicit comma-separated identifier list (full window titles, overrides `-n`) | - |
 | `-t` | Target start time (`now` or anything `date -d` parses) | `now` |
@@ -80,9 +94,11 @@ to it) can race and send the wrong character. Terminals not spawned through
 `spawn_terminal.sh` won't have this binding, so `-I clip` won't work there.
 
 ```bash
-NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10
-NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H BATCH_host03_alice_20441,BATCH_host07_alice_20558 -t "16:30:00"
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -c "run_batch.sh" -n 10
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -H BATCH_host03_alice_20441,BATCH_host07_alice_20558 -c "run_batch.sh" -t "16:30:00"
 NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 100 -c "run_batch.sh" -t "23:00:00" -I clip
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10 -e "setenv DATA_DIR /mnt/data" -c "run_batch.sh"
+NAS_ROOT=/mnt/nas/dam_batch ./run_job.sh -n 10 -e "setenv DATA_DIR /mnt/data"
 ```
 
 Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`
@@ -94,6 +110,7 @@ Env vars: `NAS_ROOT` (default `/nas/dam_batch`), `HOSTS_FILE`, `WINDOW_PREFIX`
 Results land in `$NAS_ROOT/results/<JOBID>/summary.tsv` (`id`, seconds, exit
 code per line), plus per-id `.time`/`.rc` files. Status/barrier files, along
 with each id's generated `.script`, are in `$NAS_ROOT/status/<JOBID>/`.
+Setup-only (`-e` with no `-c`) runs show `NA`/`NA` — nothing timed.
 
 ```
 ID                                   TIME(s)  RC

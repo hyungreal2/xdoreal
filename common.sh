@@ -70,10 +70,8 @@ inject_command() {
   esac
 }
 
-# Writes a csh script (wait for the barrier file, run $cmd timed, report
-# elapsed seconds/exit code/done marker to the given paths) to $scriptfile on
-# the shared NAS, and prints the short one-line command to inject:
-# "source <scriptfile>".
+# Writes a csh script to $scriptfile on the shared NAS and prints the short
+# one-line command to inject: "source <scriptfile>".
 #
 # Always csh, and always `source` rather than spawning a new interpreter
 # process, because:
@@ -86,23 +84,47 @@ inject_command() {
 #     aliases, non-exported variables) exactly as-is, matching the
 #     requirement that the existing shell run the job, not a fresh one.
 #
+# The script body has two independent, combinable parts:
+#   - setup_cmd: run literally, with no subshell/redirection, so things like
+#     `setenv FOO bar` take effect in the sourcing shell itself (and are then
+#     visible to bench_cmd below, since it runs as a child of this shell).
+#     Wrapping it in "( )" for output capture — like bench_cmd needs, to get
+#     a clean exit status without depending on what it printed — would defeat
+#     that entirely, since csh (like any shell) forks a new process for "( )",
+#     and env changes in a child never propagate back to the parent.
+#   - bench_cmd: run inside "( )" so its own exit status and elapsed time can
+#     be captured without it needing to cooperate (no special exit-code
+#     plumbing required from the command itself).
+# Either can be empty; if both are given, setup_cmd always runs first.
+#
 # csh's `while`/`end` must not be crammed onto one line with `;` — `end` has
 # to be the only thing on its own line, or the parser errors out
 # ("while: end not found.").
 #
 # Assumes none of the paths contain spaces.
 build_remote_cmd() {
-  local barrier="$1" cmd="$2" tfile="$3" rfile="$4" dfile="$5" scriptfile="$6"
+  local barrier="$1" setup_cmd="$2" bench_cmd="$3" tfile="$4" rfile="$5" dfile="$6" scriptfile="$7"
   local script="while ( ! -f $barrier )
 sleep $BARRIER_POLL
-end
+end"
+
+  if [ -n "$setup_cmd" ]; then
+    script="$script
+$setup_cmd"
+  fi
+
+  if [ -n "$bench_cmd" ]; then
+    script="$script
 set _t0 = \`date +%s\`
-( $cmd ) >& $tfile.log
+( $bench_cmd ) >& $tfile.log
 set _rc = \$status
 set _t1 = \`date +%s\`
 @ _dt = \$_t1 - \$_t0
 echo \$_dt > $tfile
-echo \$_rc > $rfile
+echo \$_rc > $rfile"
+  fi
+
+  script="$script
 touch $dfile"
 
   printf '%s\n' "$script" > "$scriptfile"
