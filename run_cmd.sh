@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Master: runs a command on n selected X-shared terminals (xterm) at the same
-# target time, and collects each terminal's execution time via the NAS.
+# Master: runs a benchmarked command on the terminals selected by
+# select_hosts.sh, at the same target time, and collects each terminal's
+# execution time via the NAS.
 #
-# hosts.list is assumed to hold full window titles, prefix included (see
-# gen_hosts_list.sh). find_window_id matches these exactly, so multiple
-# windows for the same host are never confused, and there's no need to know
-# or pass WINDOW_PREFIX here at all.
+# Targets always come from $SELECTED_FILE (see select_hosts.sh) — this script
+# has no -n/-H of its own, so the same selection stays fixed across repeated
+# runs until select_hosts.sh is run again. Environment/setup commands
+# (setenv, source, newgrp, etc.) are run_env.sh's job, not this script's —
+# see its header for why those are handled completely separately.
 #
 # How simultaneity is achieved:
 #   1) Each target terminal first gets a "wait until the START file exists" command.
@@ -22,68 +24,42 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-SETUP_CMD=""
 BENCH_CMD=""
-N=""
-IDS_CSV=""
 TARGET_TIME="now"
 WAIT_TIMEOUT=3600
 POLL_INTERVAL=1
 INJECT_METHOD="${INJECT_METHOD:-type}"
-SELECTED_FILE="${SELECTED_FILE:-$(dirname "$HOSTS_FILE")/selected.hosts}"
-FORCE_RESELECT=0
 
 usage() {
   cat <<EOF
-Usage: $0 (-e "<setup>" | -c "<command>" | both) (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-f file] [-F]
+Usage: $0 -c "<command>" [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
 
-  -e SETUP    Command run as-is, directly in the target shell — no subshell,
-              no timing. Use for things like "setenv FOO bar" that must take
-              effect in that shell itself. If -c is also given, -e runs first,
-              injected as a separate follow-up command so it still works even
-              for setup commands that replace the shell process outright
-              (newgrp, exec, su, login) rather than just returning.
-  -c CMD      Benchmarked command: run in a subshell, timed, with exit code
-              and elapsed seconds collected. Runs after -e if both are given.
-              At least one of -e/-c is required.
-  -n N        Pick N random identifiers (full window titles) from hosts.list.
-              The first time -n is used (no existing selection file), the
-              chosen N are saved to the selection file (see -f). On later
-              runs, if that file exists, its contents are reused as-is
-              instead of picking a fresh random N — use -F to force a new
-              random pick.
-  -H LIST     Explicit comma-separated identifier list (full window titles,
-              as stored in hosts.list; overrides -n and the selection file)
+  -c CMD      Benchmarked command: run as a child csh process, timed, with
+              exit code and elapsed seconds collected (required)
   -t TIME     Target start time. "now" or anything date -d can parse (default: now)
               e.g. -t "16:30:00"  -t "2026-07-04 23:00:00"  -t "+5 minutes"
   -w SECONDS  Max time to wait for completion (default: 3600)
   -p SECONDS  Completion poll interval (default: 1)
   -I METHOD   Injection method: type (char-by-char typing, default) | clip
               (clipboard+paste, needs xclip). clip is much faster for large n.
-  -f FILE     Selection file path for -n (default: $SELECTED_FILE)
-  -F          Force a fresh random -n selection, overwriting the selection file
+
+Reads targets from \$SELECTED_FILE (see select_hosts.sh) — run that first.
 EOF
   exit 1
 }
 
-while getopts "e:c:n:H:t:w:p:I:f:Fh" opt; do
+while getopts "c:t:w:p:I:h" opt; do
   case "$opt" in
-    e) SETUP_CMD="$OPTARG" ;;
     c) BENCH_CMD="$OPTARG" ;;
-    n) N="$OPTARG" ;;
-    H) IDS_CSV="$OPTARG" ;;
     t) TARGET_TIME="$OPTARG" ;;
     w) WAIT_TIMEOUT="$OPTARG" ;;
     p) POLL_INTERVAL="$OPTARG" ;;
     I) INJECT_METHOD="$OPTARG" ;;
-    f) SELECTED_FILE="$OPTARG" ;;
-    F) FORCE_RESELECT=1 ;;
     *) usage ;;
   esac
 done
 
-[ -z "$N" ] && [ -z "$IDS_CSV" ] && usage
-[ -z "$SETUP_CMD" ] && [ -z "$BENCH_CMD" ] && { log "ERROR: at least one of -e or -c is required"; exit 1; }
+[ -z "$BENCH_CMD" ] && usage
 
 case "$INJECT_METHOD" in
   type) ;;
@@ -91,16 +67,8 @@ case "$INJECT_METHOD" in
   *) log "ERROR: -I must be type or clip"; exit 1 ;;
 esac
 
-if [ -n "$IDS_CSV" ]; then
-  IFS=',' read -r -a TARGET_IDS <<< "$IDS_CSV"
-elif [ "$FORCE_RESELECT" -eq 0 ] && [ -s "$SELECTED_FILE" ]; then
-  mapfile -t TARGET_IDS < "$SELECTED_FILE"
-  log "reusing ${#TARGET_IDS[@]} previously selected identifier(s) from $SELECTED_FILE"
-else
-  mapfile -t TARGET_IDS < <(select_hosts_random "$N")
-  printf '%s\n' "${TARGET_IDS[@]}" > "$SELECTED_FILE"
-  log "selected ${#TARGET_IDS[@]} random identifier(s), saved to $SELECTED_FILE"
-fi
+require_selection_file || exit 1
+mapfile -t TARGET_IDS < <(load_selected_hosts)
 
 JOBID="$(date +%Y%m%d-%H%M%S)-$$"
 RESULTS_D="$(RESULTS_DIR "$JOBID")"
@@ -121,12 +89,10 @@ for id in "${TARGET_IDS[@]}"; do
     continue
   fi
 
-  pre_cmd="$(build_pre_cmd "$BARRIER_FILE" "$SETUP_CMD" "$STATUS_D/${id}.pre.script")"
-  post_cmd="$(build_post_cmd "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.post.script")"
+  cmd="$(build_cmd_script "$BARRIER_FILE" "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
 
-  inject_command "$INJECT_METHOD" "$wid" "$pre_cmd"
-  inject_command "$INJECT_METHOD" "$wid" "$post_cmd"
-  log "injected pre/post commands for $id (wid=$wid, method=$INJECT_METHOD)"
+  inject_command "$INJECT_METHOD" "$wid" "$cmd"
+  log "injected command for $id (wid=$wid, method=$INJECT_METHOD)"
 done
 
 if [ "$TARGET_TIME" = "now" ]; then

@@ -3,6 +3,7 @@
 
 NAS_ROOT="${NAS_ROOT:-/nas/dam_batch}"
 HOSTS_FILE="${HOSTS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hosts.list}"
+SELECTED_FILE="${SELECTED_FILE:-$(dirname "$HOSTS_FILE")/selected.hosts}"
 WINDOW_PREFIX="${WINDOW_PREFIX:-BATCH_}"
 BARRIER_POLL="${BARRIER_POLL:-0.05}"
 CLIP_SETTLE="${CLIP_SETTLE:-0.1}"
@@ -31,6 +32,20 @@ find_window_id() {
 select_hosts_random() {
   local n="$1"
   shuf -n "$n" "$HOSTS_FILE"
+}
+
+# run_env.sh and run_cmd.sh both act on whatever select_hosts.sh last wrote
+# to $SELECTED_FILE — neither does its own host selection. This check gives a
+# consistent error/guidance message in both instead of each re-implementing it.
+require_selection_file() {
+  if [ ! -s "$SELECTED_FILE" ]; then
+    log "ERROR: no selection file at $SELECTED_FILE — run select_hosts.sh -n <count> (or -H id1,id2,...) first"
+    return 1
+  fi
+}
+
+load_selected_hosts() {
+  cat "$SELECTED_FILE"
 }
 
 # Character-by-character typing (most compatible, but takes seconds per host
@@ -80,86 +95,45 @@ inject_command() {
   esac
 }
 
-# Writes the "pre" phase: wait for the barrier file, then run setup_cmd (if
-# any) literally — no subshell, no redirection — so things like `setenv FOO
-# bar` take effect in the sourcing shell itself. Writes to $scriptfile and
-# returns the one-line "source <scriptfile>" command to inject.
+# Writes run_cmd.sh's dispatched script: wait for the barrier file, then run
+# bench_cmd timed, capturing exit code and elapsed seconds, then touch the
+# completion marker. Writes to $scriptfile and returns the one-line
+# "csh <scriptfile>" command to inject — a plain command invocation, not
+# `source`. run_cmd.sh has no setup step of its own (that's run_env.sh's
+# entire job, run separately beforehand), so there's no shell-replacement
+# concern here and no reason to source this into the listening shell; running
+# it as a genuine child process is simpler and works the same regardless of
+# what shell is currently interactive in the terminal.
 #
-# setup_cmd is deliberately run as its own separate injected command, not
-# merged into the same script as the benchmark (see build_post_cmd), because
-# some setup commands users actually rely on — newgrp, exec, su, login —
-# exec() a whole new process image over the shell that's reading this
-# script. Nothing placed after such a command in the SAME script would ever
-# run (the process executing it is simply gone). Since build_post_cmd is
-# injected as an independent follow-up command instead, it still gets
-# delivered and run: characters typed into a terminal while its shell is
-# busy (blocked in this while loop, or mid-exec) queue at the pty level and
-# are read by whichever shell next does a read() on that terminal — the
-# original one, or a freshly exec'd replacement.
+# bench_cmd is written to its own file ($scriptfile.bench) and run as
+# `csh $scriptfile.bench` — a further, separate child csh process — so its
+# exit status and elapsed time are captured the same way regardless of what
+# bench_cmd itself does (job control, nested shells, etc.). Piped through tee
+# so output shows live in the terminal as well as landing in $tfile.log. csh
+# has no pipefail/PIPESTATUS, so $status after a pipe would be tee's exit
+# code, not the benchmark's — the inner subshell writes its own $status to
+# $rfile right after csh finishes, before the outer pipe's status can
+# overwrite anything.
 #
 # csh's `while`/`end` must not be crammed onto one line with `;` — `end` has
 # to be the only thing on its own line, or the parser errors out
 # ("while: end not found.").
-build_pre_cmd() {
-  local barrier="$1" setup_cmd="$2" scriptfile="$3"
-  local script="while ( ! -f $barrier )
-sleep $BARRIER_POLL
-end"
-
-  if [ -n "$setup_cmd" ]; then
-    script="$script
-$setup_cmd"
-  fi
-
-  printf '%s\n' "$script" > "$scriptfile"
-  printf 'source %s' "$scriptfile"
-}
-
-# Writes the "post" phase: the timed bench_cmd (if any) plus the completion
-# marker. Writes to $scriptfile and returns the one-line "csh <scriptfile>"
-# command to inject — note this is a plain command invocation, NOT `source`.
-#
-# Always injected as its own command right after build_pre_cmd's (see that
-# function's comment) — this is what makes setup commands that replace the
-# shell process (newgrp, exec, su, login) still work: this "post" command
-# gets delivered and read regardless of whether the pre-phase's shell
-# survived setup_cmd unchanged or got replaced by something else entirely.
-# But that replacement shell isn't guaranteed to be csh/tcsh — e.g. newgrp
-# execs whatever the target user's login shell is configured to be, which may
-# not match the terminal's original shell. So unlike the pre-phase (which
-# must `source` its script so setup_cmd's env changes land in the listening
-# shell), this post-phase script has no such requirement — nothing runs after
-# it — so it's launched as a genuine `csh scriptfile` child process instead.
-# "word word" is parsed as "run this program with this argument" identically
-# by every common shell (bash, sh, csh, tcsh, zsh), so the csh syntax below
-# is always interpreted by a real csh, no matter what shell typed it in.
-#
-# bench_cmd is written to its own file ($scriptfile.bench) and run as
-# `csh $scriptfile.bench` — a genuine child csh process, not a "( )" subshell
-# — so its exit status and elapsed time are captured the same way regardless
-# of what bench_cmd itself does (job control, nested shells, etc.). Piped
-# through tee so output shows live in the terminal as well as landing in
-# $tfile.log. csh has no pipefail/PIPESTATUS, so $status after a pipe would
-# be tee's exit code, not the benchmark's — the inner subshell writes its own
-# $status to $rfile right after csh finishes, before the outer pipe's status
-# can overwrite anything.
 #
 # Assumes none of the paths contain spaces.
-build_post_cmd() {
-  local bench_cmd="$1" tfile="$2" rfile="$3" dfile="$4" scriptfile="$5"
+build_cmd_script() {
+  local barrier="$1" bench_cmd="$2" tfile="$3" rfile="$4" dfile="$5" scriptfile="$6"
   local benchfile="${scriptfile}.bench"
-  local script=""
 
-  if [ -n "$bench_cmd" ]; then
-    printf '%s\n' "$bench_cmd" > "$benchfile"
-    script="set _t0 = \`date +%s\`
+  printf '%s\n' "$bench_cmd" > "$benchfile"
+
+  local script="while ( ! -f $barrier )
+sleep $BARRIER_POLL
+end
+set _t0 = \`date +%s\`
 ( csh $benchfile ; echo \$status > $rfile ) |& tee $tfile.log
 set _t1 = \`date +%s\`
 @ _dt = \$_t1 - \$_t0
-echo \$_dt > $tfile"
-  fi
-
-  script="$script
+echo \$_dt > $tfile
 touch $dfile"
 
   printf '%s\n' "$script" > "$scriptfile"
