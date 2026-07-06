@@ -30,31 +30,43 @@ TARGET_TIME="now"
 WAIT_TIMEOUT=3600
 POLL_INTERVAL=1
 INJECT_METHOD="${INJECT_METHOD:-type}"
+SELECTED_FILE="${SELECTED_FILE:-$(dirname "$HOSTS_FILE")/selected.hosts}"
+FORCE_RESELECT=0
 
 usage() {
   cat <<EOF
-Usage: $0 (-e "<setup>" | -c "<command>" | both) (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip]
+Usage: $0 (-e "<setup>" | -c "<command>" | both) (-n <count> | -H id1,id2,...) [-t "<time>"] [-w <sec>] [-p <sec>] [-I type|clip] [-f file] [-F]
 
   -e SETUP    Command run as-is, directly in the target shell — no subshell,
               no timing. Use for things like "setenv FOO bar" that must take
-              effect in that shell itself. If -c is also given, -e runs first.
+              effect in that shell itself. If -c is also given, -e runs first,
+              injected as a separate follow-up command so it still works even
+              for setup commands that replace the shell process outright
+              (newgrp, exec, su, login) rather than just returning.
   -c CMD      Benchmarked command: run in a subshell, timed, with exit code
               and elapsed seconds collected. Runs after -e if both are given.
               At least one of -e/-c is required.
-  -n N        Pick N random identifiers (full window titles) from hosts.list
+  -n N        Pick N random identifiers (full window titles) from hosts.list.
+              The first time -n is used (no existing selection file), the
+              chosen N are saved to the selection file (see -f). On later
+              runs, if that file exists, its contents are reused as-is
+              instead of picking a fresh random N — use -F to force a new
+              random pick.
   -H LIST     Explicit comma-separated identifier list (full window titles,
-              as stored in hosts.list; overrides -n)
+              as stored in hosts.list; overrides -n and the selection file)
   -t TIME     Target start time. "now" or anything date -d can parse (default: now)
               e.g. -t "16:30:00"  -t "2026-07-04 23:00:00"  -t "+5 minutes"
   -w SECONDS  Max time to wait for completion (default: 3600)
   -p SECONDS  Completion poll interval (default: 1)
   -I METHOD   Injection method: type (char-by-char typing, default) | clip
               (clipboard+paste, needs xclip). clip is much faster for large n.
+  -f FILE     Selection file path for -n (default: $SELECTED_FILE)
+  -F          Force a fresh random -n selection, overwriting the selection file
 EOF
   exit 1
 }
 
-while getopts "e:c:n:H:t:w:p:I:h" opt; do
+while getopts "e:c:n:H:t:w:p:I:f:Fh" opt; do
   case "$opt" in
     e) SETUP_CMD="$OPTARG" ;;
     c) BENCH_CMD="$OPTARG" ;;
@@ -64,6 +76,8 @@ while getopts "e:c:n:H:t:w:p:I:h" opt; do
     w) WAIT_TIMEOUT="$OPTARG" ;;
     p) POLL_INTERVAL="$OPTARG" ;;
     I) INJECT_METHOD="$OPTARG" ;;
+    f) SELECTED_FILE="$OPTARG" ;;
+    F) FORCE_RESELECT=1 ;;
     *) usage ;;
   esac
 done
@@ -79,8 +93,13 @@ esac
 
 if [ -n "$IDS_CSV" ]; then
   IFS=',' read -r -a TARGET_IDS <<< "$IDS_CSV"
+elif [ "$FORCE_RESELECT" -eq 0 ] && [ -s "$SELECTED_FILE" ]; then
+  mapfile -t TARGET_IDS < "$SELECTED_FILE"
+  log "reusing ${#TARGET_IDS[@]} previously selected identifier(s) from $SELECTED_FILE"
 else
   mapfile -t TARGET_IDS < <(select_hosts_random "$N")
+  printf '%s\n' "${TARGET_IDS[@]}" > "$SELECTED_FILE"
+  log "selected ${#TARGET_IDS[@]} random identifier(s), saved to $SELECTED_FILE"
 fi
 
 JOBID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -102,10 +121,12 @@ for id in "${TARGET_IDS[@]}"; do
     continue
   fi
 
-  remote_cmd="$(build_remote_cmd "$BARRIER_FILE" "$SETUP_CMD" "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
+  pre_cmd="$(build_pre_cmd "$BARRIER_FILE" "$SETUP_CMD" "$STATUS_D/${id}.pre.script")"
+  post_cmd="$(build_post_cmd "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.post.script")"
 
-  inject_command "$INJECT_METHOD" "$wid" "$remote_cmd"
-  log "injected wait command for $id (wid=$wid, method=$INJECT_METHOD)"
+  inject_command "$INJECT_METHOD" "$wid" "$pre_cmd"
+  inject_command "$INJECT_METHOD" "$wid" "$post_cmd"
+  log "injected pre/post commands for $id (wid=$wid, method=$INJECT_METHOD)"
 done
 
 if [ "$TARGET_TIME" = "now" ]; then
