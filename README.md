@@ -167,6 +167,20 @@ and every waiting terminal starts within `BARRIER_POLL`'s polling interval of
 each other. This keeps actual start times aligned even if injecting the
 command itself takes a while sequentially across many terminals.
 
+**Permissions**: the `results/`/`status/` job directories this script creates
+under `$NAS_ROOT` are explicitly `chmod 0777` right after `mkdir -p` (and
+`umask 000` is set for anything else it writes), regardless of the caller's
+own umask. Each target terminal may be logged in as a different user on a
+different host, and needs to write its own `.time`/`.rc`/`.done` files into
+these same directories — a restrictive default (e.g. the common `022`) would
+block those writes outright, and a stricter one (e.g. `077`) is worse: a
+directory without traverse permission makes `[ -f barrier ]` evaluate to
+false forever rather than erroring, which looks exactly like a terminal
+permanently stuck at `csh <script>`, spinning in the barrier-wait loop and
+never seeing the START file the master already touched. (`$NAS_ROOT` itself
+is left alone — it's assumed to already be a properly shared mount, not
+something this script should be chmod-ing.)
+
 `clip` pastes via Ctrl+Shift+V, a binding `spawn_terminal.sh` sets up at
 launch — not xterm's default Shift+Insert, since `Insert` isn't a native key
 in every keymap and xdotool's fallback (temporarily remapping a spare keycode

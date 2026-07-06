@@ -70,10 +70,24 @@ esac
 require_selection_file || exit 1
 mapfile -t TARGET_IDS < <(load_selected_hosts)
 
+# Every selected terminal writes its own .time/.rc/.done into these
+# directories, and each one polls $BARRIER_FILE for existence — potentially
+# as a different login user on a different host than whoever runs this
+# script. A restrictive umask on mkdir (e.g. the common 022, or a hardened
+# system's 077) leaves other users unable to write there, or in the 077 case
+# unable even to see whether $BARRIER_FILE exists at all: `[ -f file ]`
+# inside a directory you can't traverse just evaluates to false forever, not
+# an error — which looks exactly like a terminal permanently stuck at
+# "csh <script>" with the barrier-wait loop spinning and never finding the
+# START file the master already touched. chmod 0777 here (rather than
+# depending on umask) makes both failure modes impossible regardless of who
+# runs this script or what their umask is.
 JOBID="$(date +%Y%m%d-%H%M%S)-$$"
 RESULTS_D="$(RESULTS_DIR "$JOBID")"
 STATUS_D="$(STATUS_DIR "$JOBID")"
 mkdir -p "$RESULTS_D" "$STATUS_D"
+chmod 0777 "$(dirname "$RESULTS_D")" "$(dirname "$STATUS_D")" "$RESULTS_D" "$STATUS_D"
+umask 000
 BARRIER_FILE="$STATUS_D/START"
 
 log "JOBID=$JOBID target count=${#TARGET_IDS[@]}"
