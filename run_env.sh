@@ -52,6 +52,11 @@ mapfile -t TARGET_IDS < <(load_selected_hosts)
 
 log "target count=${#TARGET_IDS[@]}"
 
+# Fail up front, before sending anything, if a selected terminal has
+# disappeared (closed, crashed, host rebooted) rather than silently sending
+# to whatever subset still exists.
+check_windows_exist TARGET_IDS || { log "ERROR: one or more selected terminals not found — aborting"; exit 1; }
+
 FAILED=0
 for id in "${TARGET_IDS[@]}"; do
   wid="$(find_window_id "$id")"
@@ -61,7 +66,16 @@ for id in "${TARGET_IDS[@]}"; do
     continue
   fi
 
-  inject_command "$INJECT_METHOD" "$wid" "$CMD"
+  # Guarded rather than a bare call: under `set -e`, an unwrapped failing
+  # command aborts the whole script immediately, so one bad terminal would
+  # silently strand every id still left in the loop. Wrapping it as an `if`
+  # condition is exempt from that, so a single failure here is just recorded
+  # and the loop moves on to the rest.
+  if ! inject_command "$INJECT_METHOD" "$wid" "$CMD"; then
+    log "WARN: injection failed for $id, skipping"
+    FAILED=$((FAILED + 1))
+    continue
+  fi
   log "sent to $id (wid=$wid, method=$INJECT_METHOD)"
 done
 

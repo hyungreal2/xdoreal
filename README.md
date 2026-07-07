@@ -130,6 +130,18 @@ its own; they only ever read whatever this last wrote.
 If `selected.hosts` doesn't exist yet, it errors out telling you to run
 `select_hosts.sh` first, rather than guessing a target set.
 
+Before sending anything, it checks that every selected terminal's window
+still exists — a terminal that closed, crashed, or whose host rebooted since
+`select_hosts.sh` ran is reported (one `ERROR: no terminal window found for
+<id>` line per missing one) and the whole run is aborted, rather than
+silently sending to whatever subset happens to still be around.
+
+If an individual injection still fails partway through (e.g. a terminal
+closes in the instant between that check and its turn), it's logged as a
+`WARN` and skipped — that one host is excluded from the count, but every
+other selected terminal still gets the command; a single bad terminal can't
+strand the rest of the run.
+
 ```bash
 SELECTED_FILE=/mnt/nas/dam_batch/selected.hosts ./run_env.sh -c "setenv DATA_DIR /mnt/data"
 SELECTED_FILE=/mnt/nas/dam_batch/selected.hosts ./run_env.sh -c "newgrp projgroup"
@@ -150,7 +162,9 @@ SELECTED_FILE=/mnt/nas/dam_batch/selected.hosts ./run_env.sh -c "source ~/setup.
 | `-p` | Completion poll interval (sec) | `1` |
 | `-I` | Injection method: `type` or `clip` (`clip` needs `xclip`, much faster for large n) | `type` |
 
-Same missing-`selected.hosts` guard as `run_env.sh`.
+Same missing-`selected.hosts` guard, pre-flight window check, and per-host
+injection-failure resilience as `run_env.sh` (a host that fails to inject is
+excluded from the completion count too, so the wait loop doesn't hang on it).
 
 `-c` is written to its own script file and run as `csh <benchscript>`, piped
 through `tee` — a genuine child csh process, timed, with exit code and

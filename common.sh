@@ -48,6 +48,23 @@ load_selected_hosts() {
   cat "$SELECTED_FILE"
 }
 
+# Verifies every id in the given array (passed by name) currently has a live
+# window, before run_env.sh/run_cmd.sh does any real work. Prints one ERROR
+# line per missing id and returns non-zero if any were missing, so a
+# terminal that disappeared (closed, crashed, host rebooted) is caught
+# up front as a hard failure instead of being silently skipped mid-run.
+check_windows_exist() {
+  local -n ids_ref="$1"
+  local id missing=0
+  for id in "${ids_ref[@]}"; do
+    if [ -z "$(find_window_id "$id")" ]; then
+      log "ERROR: no terminal window found for $id"
+      missing=$((missing + 1))
+    fi
+  done
+  [ "$missing" -eq 0 ]
+}
+
 # Character-by-character typing (most compatible, but takes seconds per host
 # for long strings)
 inject_via_type() {

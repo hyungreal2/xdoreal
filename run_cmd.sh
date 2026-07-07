@@ -70,6 +70,11 @@ esac
 require_selection_file || exit 1
 mapfile -t TARGET_IDS < <(load_selected_hosts)
 
+# Fail up front, before touching the NAS or sending anything, if a selected
+# terminal has disappeared (closed, crashed, host rebooted) rather than
+# silently dispatching to whatever subset still exists.
+check_windows_exist TARGET_IDS || { log "ERROR: one or more selected terminals not found — aborting"; exit 1; }
+
 # Every selected terminal writes its own .time/.rc/.done into these
 # directories, and each one polls $BARRIER_FILE for existence — potentially
 # as a different login user on a different host than whoever runs this
@@ -105,7 +110,17 @@ for id in "${TARGET_IDS[@]}"; do
 
   cmd="$(build_cmd_script "$BARRIER_FILE" "$BENCH_CMD" "$RESULTS_D/${id}.time" "$RESULTS_D/${id}.rc" "$STATUS_D/${id}.done" "$STATUS_D/${id}.script")"
 
-  inject_command "$INJECT_METHOD" "$wid" "$cmd"
+  # Guarded rather than a bare call: under `set -e`, an unwrapped failing
+  # command aborts the whole script immediately, so one bad terminal would
+  # silently strand every id still left in the loop, including the barrier
+  # touch and completion wait below. Wrapping it as an `if` condition is
+  # exempt from that, so a single failure here is just recorded and the loop
+  # moves on to the rest.
+  if ! inject_command "$INJECT_METHOD" "$wid" "$cmd"; then
+    log "WARN: injection failed for $id, skipping"
+    FAILED_IDS+=("$id")
+    continue
+  fi
   log "injected command for $id (wid=$wid, method=$INJECT_METHOD)"
 done
 
