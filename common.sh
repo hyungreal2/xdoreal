@@ -19,6 +19,28 @@ STATUS_DIR()  { echo "$NAS_ROOT/status/$1"; }
 
 log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >&2; }
 
+# Creates each given directory (mkdir -p) and chmods 0777 the whole chain
+# from it up to (but not including) $NAS_ROOT — not just the directory
+# itself. Every selected terminal may write into these paths as a different
+# login user on a different host, so a restrictive default from whoever's
+# umask created them (the common 022, or a hardened system's 077) would
+# otherwise block those writes, or worse, block a directory *traversal*
+# needed just to check whether a file exists (see run_cmd.sh's barrier-wait
+# comment for what that specific failure mode looks like). $NAS_ROOT itself
+# is left untouched — it's assumed to already be a properly shared mount,
+# not something this project should be chmod-ing.
+mkdir_shared() {
+  local d path
+  for d in "$@"; do
+    mkdir -p "$d"
+    path="$d"
+    while [ "$path" != "$NAS_ROOT" ] && [ "$path" != "/" ] && [ "$path" != "." ]; do
+      chmod 0777 "$path"
+      path="$(dirname "$path")"
+    done
+  done
+}
+
 # hosts.list stores the full window title, prefix included (see
 # gen_hosts_list.sh). Finds the window whose title is an exact match — since
 # the stored string already includes whatever prefix that window was spawned

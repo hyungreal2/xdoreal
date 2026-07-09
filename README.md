@@ -16,11 +16,12 @@ aggregates each terminal's execution time via a shared NAS.
 | `select_hosts.sh` | Picks targets from `hosts.list` and writes `selected.hosts` |
 | `run_env.sh` | Sends an environment/setup command to each selected terminal — no timing, no sync |
 | `run_cmd.sh` | Runs a benchmarked command on each selected terminal, synchronized, timed |
+| `check_hosts.sh` | Diagnostics/maintenance on selected terminals: liveness check, screen clear, Ctrl+C |
 
 No agent needs to run on the target hosts — commands are typed/pasted
 directly into the shell that's already open in each terminal.
 
-## Why three separate scripts
+## Why four separate scripts
 
 Two fundamentally different jobs used to live in one script, and got tangled:
 - Setup commands (`setenv`, `source`, `newgrp`, ...) need to take effect *in
@@ -37,9 +38,15 @@ complicated (see below) for no benefit to it. So they're now separate tools:
   shell is now a member of `group` (see below for why this — and other
   shell-replacing commands — actually still works correctly here).
 - **`run_cmd.sh`** keeps the synchronized-start/timing machinery, and only that.
-- **`select_hosts.sh`** picks the target set once; `run_env.sh` and
-  `run_cmd.sh` both just read whatever it last wrote, so a setup pass and a
-  benchmark pass always hit the exact same hosts without re-specifying them.
+- **`select_hosts.sh`** picks the target set once; `run_env.sh`, `run_cmd.sh`,
+  and `check_hosts.sh` all just read whatever it last wrote, so a setup pass
+  and a benchmark pass always hit the exact same hosts without re-specifying
+  them.
+- **`check_hosts.sh`** is neither of the above — it doesn't run a
+  user-supplied command *inside* the shell at all. It acts *on* the terminal:
+  is it still responding, clear its scrollback, or send it Ctrl+C. One of its
+  actions (`interrupt`) is a raw key event, not even typed text, so it never
+  fit the `-c "<command>"` shape either of the other two scripts use.
 
 ## Why `run_env.sh` still works for shell-replacing commands
 
@@ -181,19 +188,21 @@ and every waiting terminal starts within `BARRIER_POLL`'s polling interval of
 each other. This keeps actual start times aligned even if injecting the
 command itself takes a while sequentially across many terminals.
 
-**Permissions**: the `results/`/`status/` job directories this script creates
-under `$NAS_ROOT` are explicitly `chmod 0777` right after `mkdir -p` (and
-`umask 000` is set for anything else it writes), regardless of the caller's
-own umask. Each target terminal may be logged in as a different user on a
-different host, and needs to write its own `.time`/`.rc`/`.done` files into
-these same directories — a restrictive default (e.g. the common `022`) would
-block those writes outright, and a stricter one (e.g. `077`) is worse: a
-directory without traverse permission makes `[ -f barrier ]` evaluate to
-false forever rather than erroring, which looks exactly like a terminal
-permanently stuck at `csh <script>`, spinning in the barrier-wait loop and
-never seeing the START file the master already touched. (`$NAS_ROOT` itself
-is left alone — it's assumed to already be a properly shared mount, not
-something this script should be chmod-ing.)
+**Permissions**: the `results/`/`status/` job directories this script (and
+`check_hosts.sh -a check`) creates under `$NAS_ROOT` go through
+`common.sh`'s `mkdir_shared`, which `chmod 0777`s the whole chain from each
+directory up to (but not including) `$NAS_ROOT` right after creating it (and
+`umask 000` is set for anything else `run_cmd.sh` writes), regardless of the
+caller's own umask. Each target terminal may be logged in as a different
+user on a different host, and needs to write its own `.time`/`.rc`/`.done`
+files into these same directories — a restrictive default (e.g. the common
+`022`) would block those writes outright, and a stricter one (e.g. `077`) is
+worse: a directory without traverse permission makes `[ -f barrier ]`
+evaluate to false forever rather than erroring, which looks exactly like a
+terminal permanently stuck at `csh <script>`, spinning in the barrier-wait
+loop and never seeing the START file the master already touched. (`$NAS_ROOT`
+itself is left alone — it's assumed to already be a properly shared mount,
+not something this project should be chmod-ing.)
 
 `clip` pastes via Ctrl+Shift+V, a binding `spawn_terminal.sh` sets up at
 launch — not xterm's default Shift+Insert, since `Insert` isn't a native key
@@ -209,10 +218,49 @@ NAS_ROOT=/mnt/nas/dam_batch run_cmd.sh -c "run_batch.sh" -t "23:00:00" -I clip
 ```
 
 Env vars (shared, `common.sh`): `NAS_ROOT` (default `/nas/dam_batch`, used by
-`run_cmd.sh` only), `HOSTS_FILE`, `SELECTED_FILE` (same as `-f`/default target
-for `run_env.sh`/`run_cmd.sh`), `WINDOW_PREFIX` (only `spawn_terminal.sh`/
-`gen_hosts_list.sh`), `BARRIER_POLL` (default `0.05`), `CLIP_SETTLE`
-(default `0.1`), `INJECT_METHOD`.
+`run_cmd.sh`/`check_hosts.sh -a check`), `HOSTS_FILE`, `SELECTED_FILE` (same
+as `-f`/default target for `run_env.sh`/`run_cmd.sh`/`check_hosts.sh`),
+`WINDOW_PREFIX` (only `spawn_terminal.sh`/`gen_hosts_list.sh`),
+`BARRIER_POLL` (default `0.05`), `CLIP_SETTLE` (default `0.1`),
+`INJECT_METHOD`.
+
+## check_hosts.sh
+
+```bash
+./check_hosts.sh -a check|clear|interrupt [-w <sec>] [-I type|clip]
+```
+
+| Option | Meaning | Default |
+|---|---|---|
+| `-a` | `check` (liveness probe), `clear` (scrollback reset), or `interrupt` (Ctrl+C) — required | - |
+| `-w` | Liveness probe timeout in seconds, `-a check` only | `5` |
+| `-I` | Injection method for `check`/`clear`: `type` or `clip` (`interrupt` is always a raw key event, ignores this) | `type` |
+
+Same missing-`selected.hosts` guard and pre-flight window check as
+`run_env.sh`/`run_cmd.sh`.
+
+- **`check`**: types `echo alive > <marker file>` into each terminal and
+  polls for that file to appear, up to `-w` seconds. A terminal whose window
+  exists but whose shell isn't actually reading input — e.g. blocked in an
+  uninterruptible syscall on a stale NFS mount, or busy with a runaway
+  foreground process — never creates its marker, and is reported as
+  `NO RESPONSE` rather than `RESPONSIVE`. This is a different failure mode
+  than the window simply not existing (that's the pre-flight check above).
+- **`clear`**: sends the `clear` command, like any other typed command — only
+  helps a terminal that's already responsive; it can't do anything for one
+  that's genuinely stuck (that input just queues, unread, same as any other
+  command would).
+- **`interrupt`**: sends Ctrl+C (`xdotool key ctrl+c`) to cancel whatever's
+  running in the foreground. Best-effort — SIGINT can't touch a process
+  blocked in an uninterruptible syscall either, so a hard NFS hang won't be
+  fixed by this; only the mount recovering, or killing/respawning the
+  terminal, will.
+
+```bash
+check_hosts.sh -a check -w 10
+check_hosts.sh -a interrupt
+check_hosts.sh -a clear
+```
 
 ## Output
 
